@@ -1,6 +1,6 @@
-import type { ChatRole } from "@prisma/client";
-
 export const RESUME_CHAT_PROMPT_VERSION = "resume-chat-v1";
+
+type ChatRole = "USER" | "ASSISTANT";
 
 type PromptMessage = {
   role: ChatRole;
