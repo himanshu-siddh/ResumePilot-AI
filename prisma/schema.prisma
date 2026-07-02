@@ -1,0 +1,234 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum ResumeVersionStatus {
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum AnalysisStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AnalysisFindingCategory {
+  STRENGTH
+  WEAKNESS
+  GRAMMAR
+  FORMATTING
+  RECOMMENDATION
+}
+
+enum AnalysisSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  resumes     Resume[]
+  analyses    ResumeAnalysis[]
+  chatThreads ChatThread[]
+
+  @@index([createdAt])
+}
+
+model Resume {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions    ResumeVersion[]
+  chatThreads ChatThread[]
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([userId, deletedAt])
+}
+
+model ResumeVersion {
+  id            String              @id @default(cuid())
+  resumeId      String
+  versionNumber Int
+  fileName      String
+  fileKey       String              @unique
+  fileUrl       String
+  mimeType      String
+  sizeBytes     Int
+  checksum      String?
+  extractedText String?             @db.Text
+  status        ResumeVersionStatus @default(UPLOADED)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  resume   Resume           @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  analyses ResumeAnalysis[]
+
+  @@unique([resumeId, versionNumber])
+  @@index([resumeId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ResumeAnalysis {
+  id              String         @id @default(cuid())
+  userId          String
+  resumeVersionId String
+  status          AnalysisStatus @default(PROCESSING)
+  atsScore        Int?
+  overallScore    Int?
+  summary         String?        @db.Text
+  model           String
+  promptVersion   String
+  errorMessage    String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeVersion ResumeVersion     @relation(fields: [resumeVersionId], references: [id], onDelete: Cascade)
+  findings      AnalysisFinding[]
+  missingSkills MissingSkill[]
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([resumeVersionId])
+  @@index([status])
+}
+
+model AnalysisFinding {
+  id          String                  @id @default(cuid())
+  analysisId  String
+  category    AnalysisFindingCategory
+  severity    AnalysisSeverity?
+  title       String
+  description String                  @db.Text
+  beforeText  String?                 @db.Text
+  afterText   String?                 @db.Text
+  sortOrder   Int                     @default(0)
+  createdAt   DateTime                @default(now())
+
+  analysis ResumeAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+  @@index([analysisId, category])
+  @@index([analysisId, sortOrder])
+}
+
+model MissingSkill {
+  id         String           @id @default(cuid())
+  analysisId String
+  skill      String
+  importance AnalysisSeverity
+  reason     String           @db.Text
+  createdAt  DateTime         @default(now())
+
+  analysis ResumeAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
+  @@index([skill])
+}
+
+model ChatThread {
+  id        String   @id @default(cuid())
+  userId    String
+  resumeId  String
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resume   Resume        @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@index([userId, updatedAt])
+  @@index([userId, resumeId])
+  @@index([resumeId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  threadId  String
+  role      ChatRole
+  content   String   @db.Text
+  model     String?
+  createdAt DateTime @default(now())
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+  @@index([threadId, createdAt])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
