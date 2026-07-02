@@ -6,9 +6,7 @@ import {
   RESUME_UPLOAD_MAX_BYTES,
   RESUME_UPLOAD_MIME_TYPE,
 } from "@/features/resumes/constants/upload-limits";
-import { runResumeAnalysis } from "@/features/analysis/services/resume-analysis-service";
-import { createResumeFromUpload } from "@/features/resumes/services/resume-service";
-import { auth } from "@/server/auth";
+import { auth } from "@/server/auth/middleware";
 
 const uploadthing = createUploadthing();
 
@@ -63,6 +61,13 @@ export const uploadRouter = {
       };
     })
     .onUploadComplete(async ({ metadata, file }) => {
+      const { createResumeFromUpload } = await import(
+        "@/features/resumes/services/resume-service"
+      );
+      const { runResumeAnalysis } = await import(
+        "@/features/analysis/services/resume-analysis-service"
+      );
+
       const resume = await createResumeFromUpload({
         userId: metadata.userId,
         fileName: file.name,

@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+import { PDFParse } from "pdf-parse";
+
 import {
   RESUME_UPLOAD_MAX_BYTES,
   RESUME_UPLOAD_MIME_TYPE,
@@ -12,29 +14,22 @@ const PDF_EXTRACTION_MAX_ATTEMPTS = 3;
 const PDF_EXTRACTION_RETRY_DELAY_MS = 1_500;
 const MIN_EXTRACTED_TEXT_LENGTH = 80;
 const ALLOWED_PDF_HOST_SUFFIXES = [".ufs.sh", "ufs.sh", "utfs.io"];
-
-type PdfParseResult = {
-  text: string;
-};
-
-type PdfParseInstance = {
-  getText(): Promise<PdfParseResult>;
-  destroy(): Promise<void>;
-};
-
-type PdfParseConstructor = {
-  new (options: { data: Uint8Array }): PdfParseInstance;
-  setWorker(workerSrc?: string): string;
-};
+const PDFJS_DIST_VERSION = "5.4.296";
 
 const runtimeRequire = createRequire(`${process.cwd()}/package.json`);
-let cachedPdfParse: PdfParseConstructor | null = null;
+let workerConfigured = false;
 
-function configurePdfWorker(
-  pdfParseModule: { PDFParse: PdfParseConstructor },
-) {
-  // Vercel serverless cannot reliably load a file:// pdf.worker.mjs path.
+function configurePdfWorker() {
+  if (workerConfigured) {
+    return;
+  }
+
+  workerConfigured = true;
+
   if (process.env.VERCEL === "1") {
+    PDFParse.setWorker(
+      `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_DIST_VERSION}/legacy/build/pdf.worker.mjs`,
+    );
     return;
   }
 
@@ -44,26 +39,11 @@ function configurePdfWorker(
     );
 
     if (existsSync(workerPath)) {
-      pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href);
+      PDFParse.setWorker(pathToFileURL(workerPath).href);
     }
   } catch {
-    // Fall back to Node's built-in pdfjs execution without an explicit worker.
+    // Fall back to pdfjs-dist defaults when the worker file is unavailable.
   }
-}
-
-function getPdfParse() {
-  if (cachedPdfParse) {
-    return cachedPdfParse;
-  }
-
-  const pdfParseModule = runtimeRequire("pdf-parse") as {
-    PDFParse: PdfParseConstructor;
-  };
-
-  configurePdfWorker(pdfParseModule);
-  cachedPdfParse = pdfParseModule.PDFParse;
-
-  return cachedPdfParse;
 }
 
 export class PdfTextExtractionError extends Error {
@@ -142,7 +122,8 @@ async function extractPdfTextOnce(fileUrl: string) {
       throw new PdfTextExtractionError("PDF exceeds the 5MB processing limit.");
     }
 
-    const PDFParse = getPdfParse();
+    configurePdfWorker();
+
     const parser = new PDFParse({
       data: new Uint8Array(arrayBuffer),
     });

@@ -92,7 +92,7 @@ vi.mock("next/cache", () => ({
   revalidatePath: revalidatePathMock,
 }));
 
-vi.mock("@/server/auth", () => ({
+vi.mock("@/server/auth/middleware", () => ({
   auth: authMock,
 }));
 
