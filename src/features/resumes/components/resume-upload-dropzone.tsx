@@ -109,7 +109,8 @@ export function ResumeUploadDropzone() {
                 setMessage(
                   serverData.analysisStatus === "COMPLETED"
                     ? "Resume uploaded, analyzed, and saved successfully."
-                    : "Resume uploaded, but AI analysis could not be completed.",
+                    : serverData.analysisError ??
+                      "Resume uploaded, but AI analysis could not be completed.",
                 );
                 setResult({
                   resumeId: serverData.resumeId,

@@ -1,3 +1,5 @@
+import { ZodError } from "zod";
+
 import { db } from "@/server/db/prisma";
 import {
   GEMINI_RESUME_ANALYSIS_MODEL,
@@ -19,6 +21,8 @@ import {
 import { parseJsonObject } from "@/features/analysis/utils/json";
 
 const MAX_RESUME_TEXT_FOR_MODEL = 24_000;
+const GEMINI_MAX_ATTEMPTS = 3;
+const GEMINI_RETRY_DELAY_MS = 2_000;
 
 type RunResumeAnalysisInput = {
   userId: string;
@@ -47,27 +51,66 @@ function truncateForModel(text: string) {
   return `${text.slice(0, MAX_RESUME_TEXT_FOR_MODEL)}\n\n[Resume text truncated for analysis due to length.]`;
 }
 
-async function analyzeTextWithGemini(resumeText: string) {
-  const ai = getGeminiClient();
-  const response = await ai.models.generateContent({
-    model: GEMINI_RESUME_ANALYSIS_MODEL,
-    contents: buildResumeAnalysisPrompt(truncateForModel(resumeText)),
-    config: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-      responseJsonSchema: resumeAnalysisJsonSchema,
-    },
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
+}
 
-  const text = response.text;
-
-  if (!text) {
-    throw new Error("Gemini did not return analysis text.");
+function isRetryableGeminiError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
   }
 
-  const parsed = parseJsonObject(text);
+  const message = error.message.toLowerCase();
 
-  return resumeAnalysisOutputSchema.parse(parsed);
+  return (
+    message.includes("503") ||
+    message.includes("429") ||
+    message.includes("unavailable") ||
+    message.includes("high demand") ||
+    message.includes("resource_exhausted") ||
+    message.includes("rate limit")
+  );
+}
+
+async function analyzeTextWithGemini(resumeText: string) {
+  const ai = getGeminiClient();
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_RESUME_ANALYSIS_MODEL,
+        contents: buildResumeAnalysisPrompt(truncateForModel(resumeText)),
+        config: {
+          temperature: 0.2,
+          responseMimeType: "application/json",
+          responseJsonSchema: resumeAnalysisJsonSchema,
+        },
+      });
+
+      const text = response.text;
+
+      if (!text) {
+        throw new Error("Gemini did not return analysis text.");
+      }
+
+      const parsed = parseJsonObject(text);
+
+      return resumeAnalysisOutputSchema.parse(parsed);
+    } catch (error) {
+      lastError = error;
+
+      if (!isRetryableGeminiError(error) || attempt === GEMINI_MAX_ATTEMPTS) {
+        throw error;
+      }
+
+      await delay(GEMINI_RETRY_DELAY_MS * attempt);
+    }
+  }
+
+  throw lastError ?? new Error("Gemini analysis failed.");
 }
 
 function createFindingRows(
@@ -116,7 +159,29 @@ function getSafeAnalysisErrorMessage(error: unknown) {
     return "AI analysis returned invalid JSON.";
   }
 
+  if (error instanceof ZodError) {
+    return "AI analysis returned data that failed validation.";
+  }
+
   if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+
+    if (
+      message.includes("high demand") ||
+      message.includes("unavailable") ||
+      message.includes("503")
+    ) {
+      return "Gemini is temporarily overloaded. Please wait a moment and upload again.";
+    }
+
+    if (
+      message.includes("resource_exhausted") ||
+      message.includes("quota") ||
+      message.includes("429")
+    ) {
+      return "Gemini API quota exceeded. Check billing for your API key and retry later.";
+    }
+
     return "Resume analysis failed. Please try again.";
   }
 
@@ -226,10 +291,19 @@ export async function runResumeAnalysis({
   } catch (error) {
     const errorMessage = getSafeAnalysisErrorMessage(error);
 
-    if (process.env.NODE_ENV === "development") {
+    if (process.env.NODE_ENV !== "production") {
       console.error("Resume analysis failed", {
         resumeVersionId,
         error,
+      });
+    } else {
+      console.error("Resume analysis failed", {
+        resumeVersionId,
+        message: error instanceof Error ? error.message : String(error),
+        cause:
+          error instanceof Error && error.cause instanceof Error
+            ? error.cause.message
+            : undefined,
       });
     }
 

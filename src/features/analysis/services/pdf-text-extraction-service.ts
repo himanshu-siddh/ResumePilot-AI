@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -29,6 +30,27 @@ type PdfParseConstructor = {
 const runtimeRequire = createRequire(`${process.cwd()}/package.json`);
 let cachedPdfParse: PdfParseConstructor | null = null;
 
+function configurePdfWorker(
+  pdfParseModule: { PDFParse: PdfParseConstructor },
+) {
+  // Vercel serverless cannot reliably load a file:// pdf.worker.mjs path.
+  if (process.env.VERCEL === "1") {
+    return;
+  }
+
+  try {
+    const workerPath = runtimeRequire.resolve(
+      "pdfjs-dist/legacy/build/pdf.worker.mjs",
+    );
+
+    if (existsSync(workerPath)) {
+      pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href);
+    }
+  } catch {
+    // Fall back to Node's built-in pdfjs execution without an explicit worker.
+  }
+}
+
 function getPdfParse() {
   if (cachedPdfParse) {
     return cachedPdfParse;
@@ -37,11 +59,8 @@ function getPdfParse() {
   const pdfParseModule = runtimeRequire("pdf-parse") as {
     PDFParse: PdfParseConstructor;
   };
-  const workerPath = runtimeRequire.resolve(
-    "pdfjs-dist/legacy/build/pdf.worker.mjs",
-  );
 
-  pdfParseModule.PDFParse.setWorker(pathToFileURL(workerPath).href);
+  configurePdfWorker(pdfParseModule);
   cachedPdfParse = pdfParseModule.PDFParse;
 
   return cachedPdfParse;
